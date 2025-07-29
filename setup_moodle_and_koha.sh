@@ -172,7 +172,7 @@ apt install -y apache2 apache2-utils
 
 # Configure Apache for Koha
 log "Configuring Apache for Koha..."
-a2enmod rewrite headers proxy proxy_http deflate
+a2enmod rewrite headers proxy proxy_http deflate cgi
 a2dismod mpm_event
 a2enmod mpm_prefork
 
