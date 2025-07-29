@@ -43,7 +43,7 @@ fi
 
 # Load environment variables
 log "Loading environment configuration..."
-export $(grep -v '^#' .env | xargs)
+export "$(grep -v '^#' .env | xargs)"
 
 # Validate required environment variables
 required_vars=("DOMAIN_KOHA" "DOMAIN_MOODLE" "LETSENCRYPT_EMAIL" "DB_ROOT_PASSWORD" "KOHA_DB_PASSWORD" "MOODLE_DB_PASSWORD")
