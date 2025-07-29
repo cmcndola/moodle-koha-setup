@@ -128,7 +128,7 @@ apt install -y mariadb-server mariadb-client
 systemctl start mariadb
 systemctl enable mariadb
 
-# FIXED: Properly secure MariaDB installation using automated expect script
+# Properly secure MariaDB installation using automated expect script
 log "Securing MariaDB installation..."
 warn "DO NOT TYPE ANYTHING - This process is automated!"
 
@@ -219,7 +219,7 @@ CREATE USER IF NOT EXISTS 'koha'@'localhost' IDENTIFIED BY '$KOHA_DB_PASSWORD';
 CREATE USER IF NOT EXISTS 'moodle'@'localhost' IDENTIFIED BY '$MOODLE_DB_PASSWORD';
 
 GRANT ALL PRIVILEGES ON koha_library.* TO 'koha'@'localhost';
--- FIXED: Add all required Moodle permissions
+-- Add all required Moodle permissions
 GRANT SELECT,INSERT,UPDATE,DELETE,CREATE,CREATE TEMPORARY TABLES,DROP,INDEX,ALTER,LOCK TABLES,REFERENCES ON moodle.* TO 'moodle'@'localhost';
 
 FLUSH PRIVILEGES;
@@ -283,7 +283,7 @@ ZEBRA_MARC_FORMAT="marc21"
 ZEBRA_LANGUAGE="en"
 EOF
 
-# FIXED: Configure Apache to use alternative ports to avoid conflict with Caddy
+# Configure Apache to use alternative ports to avoid conflict with Caddy
 log "Configuring Apache ports to avoid conflict with Caddy..."
 sed -i 's/Listen 80/Listen 8000/' /etc/apache2/ports.conf
 sed -i 's/Listen 443/Listen 8443/' /etc/apache2/ports.conf
