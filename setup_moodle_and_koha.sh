@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Koha + Moodle + Caddy Setup Script for Ubuntu 24.04
-# Corrected version with fixed Caddy configuration and proper Koha installation
+# Final corrected version with all permission fixes and proper Caddy configuration
 #
 # Usage:
 #   1. git clone <your-repo>
@@ -56,7 +56,7 @@ done
 # Set defaults for optional variables
 PHP_MEMORY_LIMIT=${PHP_MEMORY_LIMIT:-512M}
 PHP_MAX_UPLOAD=${PHP_MAX_UPLOAD:-512M}
-SITES_DIRECTORY=${SITES_DIRECTORY:-"/home/$SUDO_USER/sites"}
+SITES_DIRECTORY=${SITES_DIRECTORY:-"/var/www"}
 
 # Ensure running as root
 if [[ $EUID -ne 0 ]]; then
@@ -114,10 +114,18 @@ log "Starting Koha + Moodle + Caddy setup on Ubuntu 24.04"
 log "Updating system packages..."
 apt update && apt upgrade -y
 
-# Create sites directory structure
+# Create sites directory structure with proper permissions
 log "Creating sites directory structure..."
 mkdir -p "$SITES_DIRECTORY"/{moodle,data/moodledata,config,backups}
-chown -R "$SUDO_USER":"$SUDO_USER" "$SITES_DIRECTORY"
+
+# Set proper ownership - use www-data for web content
+chown -R www-data:www-data "$SITES_DIRECTORY"
+
+# Create a backup location accessible to the original user
+if [ -n "$SUDO_USER" ]; then
+    mkdir -p "/home/$SUDO_USER/sites-backup"
+    chown -R "$SUDO_USER":"$SUDO_USER" "/home/$SUDO_USER/sites-backup"
+fi
 
 # Install and secure MariaDB
 log "Installing MariaDB..."
@@ -316,7 +324,6 @@ systemctl restart apache2
 # Save Koha admin credentials
 koha-passwd library > "$SITES_DIRECTORY/config/koha-admin-password.txt"
 chmod 600 "$SITES_DIRECTORY/config/koha-admin-password.txt"
-chown "$SUDO_USER":"$SUDO_USER" "$SITES_DIRECTORY/config/koha-admin-password.txt"
 
 log "✓ Koha admin credentials saved"
 
@@ -325,21 +332,22 @@ log "Installing Moodle..."
 cd "$SITES_DIRECTORY"
 
 if [ ! -d "moodle/.git" ]; then
-    sudo -u "$SUDO_USER" git clone https://github.com/moodle/moodle.git moodle
+    # Clone Moodle directly as www-data to avoid permission issues
+    sudo -u www-data git clone https://github.com/moodle/moodle.git moodle
     cd moodle
-    sudo -u "$SUDO_USER" git checkout MOODLE_405_STABLE
-    sudo -u "$SUDO_USER" git config pull.ff only
+    sudo -u www-data git checkout MOODLE_405_STABLE
+    sudo -u www-data git config pull.ff only
 else
     cd moodle
     log "Moodle repository exists, updating..."
-    sudo -u "$SUDO_USER" git pull
+    sudo -u www-data git pull
 fi
 
-# Set Moodle permissions
+# Ensure proper Moodle permissions
 chown -R www-data:www-data "$SITES_DIRECTORY/moodle"
 chmod -R 755 "$SITES_DIRECTORY/moodle"
 
-# Configure Moodle data directory
+# Configure Moodle data directory with secure permissions
 chown -R www-data:www-data "$SITES_DIRECTORY/data/moodledata"
 find "$SITES_DIRECTORY/data/moodledata" -type d -exec chmod 700 {} \;
 find "$SITES_DIRECTORY/data/moodledata" -type f -exec chmod 600 {} \; 2>/dev/null || true
@@ -355,7 +363,13 @@ curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /
 apt update
 apt install -y caddy
 
-# Configure Caddy with corrected configuration (no invalid log encoders or redundant headers)
+# Create log directories with proper permissions BEFORE configuring Caddy
+log "Setting up Caddy log directories..."
+mkdir -p /var/log/caddy
+chown -R caddy:caddy /var/log/caddy
+chmod 755 /var/log/caddy
+
+# Configure Caddy with corrected configuration (fixed directive order and paths)
 log "Configuring Caddy reverse proxy..."
 cat > "$SITES_DIRECTORY/config/Caddyfile" << EOF
 {
@@ -399,16 +413,13 @@ $DOMAIN_KOHA_STAFF {
 $DOMAIN_MOODLE {
     root * $SITES_DIRECTORY/moodle
     
-    # Serve static files (CSS, JS, images, etc.)
-    file_server {
-        hide *.php
-    }
-    
-    # Handle PHP files
+    # CRITICAL: Handle PHP files FIRST (before file_server)
     php_fastcgi unix//run/php/php8.3-fpm.sock {
         try_files {path} {path}/index.php index.php
-        root $SITES_DIRECTORY/moodle
     }
+    
+    # Then handle static files that PHP didn't catch
+    file_server
     
     encode gzip zstd
     
@@ -422,23 +433,21 @@ $DOMAIN_MOODLE {
         -Server
     }
     
-    # Block sensitive files
+    # Block only truly sensitive files (less restrictive than before)
     @blocked {
-        path *.log *.sql *.txt *.md *.ini
-        path /config.php /install.php /admin/cli/* /lib/* /vendor/*
-        path /.git/* /node_modules/* /composer.* /behat/* /phpunit.xml
-        path */cache/* */temp/* */sessions/*
+        path /config.php
+        path /.git/*
+        path /vendor/composer.*
+        path *.log
     }
     respond @blocked 403
     
-    # Error handling
+    # Basic error handling
     handle_errors {
         @404 expression {http.error.status_code} == 404
         handle @404 {
             rewrite * /error/index.php
-            php_fastcgi unix//run/php/php8.3-fpm.sock {
-                root $SITES_DIRECTORY/moodle
-            }
+            php_fastcgi unix//run/php/php8.3-fpm.sock
         }
         respond "Error {http.error.status_code}: {http.error.status_text}" {http.error.status_code}
     }
@@ -458,9 +467,8 @@ EOF
 cp /etc/caddy/Caddyfile /etc/caddy/Caddyfile.backup 2>/dev/null || true
 cp "$SITES_DIRECTORY/config/Caddyfile" /etc/caddy/Caddyfile
 
-# Create log directories
-mkdir -p /var/log/caddy
-chown caddy:caddy /var/log/caddy
+# Format the Caddyfile to fix any formatting issues
+caddy fmt --overwrite /etc/caddy/Caddyfile
 
 # Validate Caddy configuration before starting
 log "Validating Caddy configuration..."
@@ -524,6 +532,11 @@ Caddy: 80, 443 (Reverse proxy with SSL)
 MariaDB: 3306
 PHP-FPM: Socket /run/php/php8.3-fpm.sock
 
+== File Permissions ==
+Web files: www-data:www-data
+Configuration: root:root (secured)
+Logs: caddy:caddy
+
 == Next Steps ==
 1. Point DNS records to this server
 2. Complete Koha web installer at: https://$DOMAIN_KOHA_STAFF
@@ -532,7 +545,8 @@ PHP-FPM: Socket /run/php/php8.3-fpm.sock
 == Important Files ==
 Koha Config: /etc/koha/sites/library/koha-conf.xml
 Koha Apache: /etc/apache2/sites-available/library.conf
-Moodle Config: Create via web installer
+Moodle Files: $SITES_DIRECTORY/moodle/
+Moodle Data: $SITES_DIRECTORY/data/moodledata/
 Caddy Config: $SITES_DIRECTORY/config/Caddyfile
 EOF
 
@@ -556,8 +570,9 @@ Username: moodle
 Password: $MOODLE_DB_PASSWORD
 EOF
 
+# Secure configuration files
 chmod 600 "$SITES_DIRECTORY/config"/*.txt
-chown "$SUDO_USER":"$SUDO_USER" "$SITES_DIRECTORY/config"/*.txt
+chown root:root "$SITES_DIRECTORY/config"/*.txt
 
 # Final verification
 log "Performing final system verification..."
@@ -593,6 +608,21 @@ else
     warn "✗ Caddy not listening on ports 80/443"
 fi
 
+# Check file permissions
+log "Verifying file permissions..."
+if [ -r "$SITES_DIRECTORY/moodle/index.php" ]; then
+    log "✓ Moodle files are accessible"
+else
+    warn "✗ Moodle files may have permission issues"
+fi
+
+# Test PHP-FPM access to Moodle
+if sudo -u www-data test -r "$SITES_DIRECTORY/moodle/index.php"; then
+    log "✓ PHP-FPM can access Moodle files"
+else
+    warn "✗ PHP-FPM cannot access Moodle files"
+fi
+
 # Final status report
 echo
 echo "=============================================="
@@ -626,6 +656,8 @@ echo "   • Follow web installer"
 echo "   • Database settings are pre-configured"
 echo
 echo -e "${BLUE}📁 Important Files:${NC}"
+echo "Moodle Files: $SITES_DIRECTORY/moodle/"
+echo "Moodle Data: $SITES_DIRECTORY/data/moodledata/"
 echo "Configuration: $SITES_DIRECTORY/config/"
 echo "Documentation: $SITES_DIRECTORY/config/setup-summary.txt"
 echo "Credentials: $SITES_DIRECTORY/config/koha-admin-password.txt"
@@ -643,12 +675,21 @@ echo "• View logs: sudo tail -f /var/log/caddy/*.log"
 echo "• Restart services: sudo systemctl restart apache2 caddy"
 echo "• Koha shell: sudo koha-shell library"
 echo "• Validate Caddy config: sudo caddy validate --config /etc/caddy/Caddyfile"
+echo "• Test Moodle permissions: sudo -u www-data ls -la $SITES_DIRECTORY/moodle/"
+echo
+echo -e "${GREEN}🏗️ Architecture Summary:${NC}"
+echo "• Files stored in: $SITES_DIRECTORY (owned by www-data)"
+echo "• Caddy (ports 80/443) → Reverse proxy with automatic SSL"
+echo "• Apache (ports 8000/8080) → Serves Koha"
+echo "• PHP-FPM (socket) → Processes Moodle"
+echo "• MariaDB (port 3306) → Database for both systems"
 echo
 echo -e "${RED}🔒 Security Reminders:${NC}"
 echo "• Change default passwords after setup"
 echo "• Set up regular backups"
 echo "• Keep systems updated"
 echo "• Monitor resource usage"
+echo "• Credentials are secured in $SITES_DIRECTORY/config/"
 echo "=============================================="
 
 log "Installation completed successfully! Follow the next steps above to finish setup."
