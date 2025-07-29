@@ -1,246 +1,126 @@
-# Koha + Moodle + Caddy Setup
+# Koha + Moodle Setup Script
 
-Automated setup script for deploying Koha (Library Management System) and Moodle (Learning Management System) with Caddy web server on Ubuntu 24.04.
-
-## System Requirements
-
-This script is designed for **Ubuntu 24.04** with minimum specifications:
-
-- **2 vCPU** (recommended)
-- **4GB RAM** (minimum, 6GB+ recommended for production)
-- **40GB SSD** (minimum storage)
-
-### Memory Usage Breakdown
-
-- **Operating System**: ~1GB
-- **Koha**: 750MB-1GB at idle
-- **Moodle**: 1-2GB typical usage
-- **MariaDB**: 350-500MB
-- **Caddy**: ~30MB
-- **Swap**: 4GB configured automatically
-
-### Supported Versions
-
-- **Koha**: 24.11 LTS (Long Term Support)
-- **Moodle**: 4.5 LTS (Latest stable)
-- **Ubuntu**: 24.04 LTS
-- **MariaDB**: 10.6+
-- **PHP**: 8.3
-- **Caddy**: Latest stable
-
-## Requirements
-
-- Ubuntu 24.04 VPS (minimum 2vCPU, 4GB RAM, 40GB SSD)
-- Two subdomains pointed to your server IP
-- Root access
+Automated installation script for deploying Koha (Library Management System) and Moodle (Learning Management System) on Ubuntu 24.04.
 
 ## Quick Start
 
-1. **Clone the repository**
+```bash
+git clone https://github.com/yourusername/koha-moodle-setup.git
+cd koha-moodle-setup
+cp .env.example .env
+nano .env  # Configure your domains and passwords
+sudo ./setup.sh
+```
 
-   ```bash
-   git clone https://github.com/yourusername/koha-moodle-setup.git
-   cd koha-moodle-setup
-   ```
+## Requirements
 
-2. **Configure environment**
+- **Ubuntu 24.04** VPS (minimum 2 vCPU, 4GB RAM, 40GB SSD)
+- **Two domains** pointed to your server IP:
+  - `library.example.com` → Koha public catalog
+  - `staff.example.com` → Koha staff interface
+  - `lms.example.com` → Moodle
+- **Root access**
 
-   ```bash
-   cp .env.example .env
-   nano .env  # Edit with your settings
-   ```
+## What Gets Installed
 
-3. **Set up DNS**
-   Point your subdomains to your server IP:
-
-   - `library.yourdomain.com` → Your server IP
-   - `lms.yourdomain.com` → Your server IP
-
-4. **Run setup**
-   ```bash
-   sudo ./setup.sh
-   ```
+- **Koha 24.11 LTS** - Library management system
+- **Moodle 4.5 LTS** - Learning management system
+- **MariaDB** - Database server
+- **PHP 8.3** - With all required extensions
+- **Apache** - Serves Koha (ports 8000/8080)
+- **Caddy** - Reverse proxy with automatic SSL
 
 ## Configuration
 
 Edit `.env` with your settings:
 
 ```bash
-# Domain Configuration
+# Domains
 DOMAIN_KOHA=library.example.com
+DOMAIN_KOHA_STAFF=staff.example.com
 DOMAIN_MOODLE=lms.example.com
 
-# Email for Let's Encrypt
+# Email for SSL certificates
 LETSENCRYPT_EMAIL=admin@example.com
 
-# Database Passwords (use strong passwords!)
+# Database passwords (use strong passwords!)
 DB_ROOT_PASSWORD=your_secure_root_password
 KOHA_DB_PASSWORD=your_koha_password
 MOODLE_DB_PASSWORD=your_moodle_password
+
+# Optional: Custom sites directory
+SITES_DIRECTORY=/path/to/your/sites
 ```
 
-## Post-Installation
+## After Installation
 
-### Access Your Applications
+1. **Complete Koha setup** at `https://$DOMAIN_KOHA_STAFF`
 
-- **Koha Public**: https://library.yourdomain.com
-- **Koha Staff**: https://library.yourdomain.com:8080
-- **Moodle**: https://lms.yourdomain.com
+   - Credentials in `~/sites/config/koha-admin-password.txt`
+   - Choose MARC21 format and install sample data
 
-### Koha Setup Process
+2. **Complete Moodle setup** at `https://lms.example.com`
+   - Follow the web installer
+   - Database is already configured
 
-After the script completes, you need to complete the Koha installation:
+## File Structure
 
-1. **Web Installer**: Visit https://library.yourdomain.com:8080
-
-   - Use credentials from `koha-admin-password.txt`
-   - Select MARC21 format (recommended)
-   - Install sample data for easier setup
-   - This creates database tables and basic configuration
-
-2. **Onboarding Tool**: Automatically starts after web installer
-   - Create your library/branch
-   - Set up patron categories
-   - Create superlibrarian user account
-   - Define item types
-   - Configure circulation rules
-
-### Moodle Setup Process
-
-1. **Web Installation**: Visit https://lms.yourdomain.com
-
-   - Follow the installation wizard
-   - Choose language and configure paths
-   - Select improved MySQL driver
-   - Database configuration is already completed
-   - Accept license and verify server requirements
-   - Create administrator account
-   - Register your site
-
-2. **Post-Installation Configuration**:
-   - Configure system paths for better performance
-   - Enable cron jobs (automatically configured)
-   - Set up additional plugins as needed
-
-### Technical Details
-
-- **Koha Version**: 24.11 LTS (Long Term Support)
-- **Moodle Version**: 4.5 LTS (installed via Git)
-- **MARC Format**: MARC21 (can be changed during setup)
-- **Search Engine**: Zebra (default, Elasticsearch optional)
-- **Memory Usage**: ~750MB-1GB at idle (Koha) + ~350-500MB (MariaDB) + 1-2GB (Moodle)
-- **Installation Method**: Git clone (recommended by both projects)
-- **Security**: Restrictive file permissions, proper database privileges
-- **Maintenance**: Automated cron jobs for both systems
-
-## Resource Monitoring
-
-Monitor your system resources:
-
-```bash
-# Check memory and CPU usage
-htop
-
-# Check disk usage
-df -h
-
-# Check service status
-systemctl status koha-common caddy php8.3-fpm mariadb
-
-# View logs
-tail -f /var/log/caddy/koha.log
-tail -f /var/log/caddy/moodle.log
+```
+~/sites/
+├── moodle/                 # Moodle application
+├── data/moodledata/        # Moodle data files
+├── config/                 # All configuration files
+│   ├── Caddyfile
+│   ├── koha-admin-password.txt
+│   └── database-credentials.txt
+└── backups/                # For your backup scripts
 ```
 
-## Backup Strategy
+## Architecture
 
-### Database Backups
-
-```bash
-# Backup Koha database
-mysqldump -u root -p koha_library > koha_backup_$(date +%Y%m%d).sql
-
-# Backup Moodle database
-mysqldump -u root -p moodle > moodle_backup_$(date +%Y%m%d).sql
+```
+Internet → Caddy (SSL) → {
+  library.example.com → Apache:8000 (Koha OPAC)
+  staff.example.com → Apache:8080 (Koha Staff)
+  lms.example.com → PHP-FPM (Moodle)
+}
 ```
 
-### File Backups
+## Backup
 
 ```bash
-# Backup Moodle data
-tar -czf moodledata_backup_$(date +%Y%m%d).tar.gz /var/moodledata
+# Files
+tar -czf backup-$(date +%Y%m%d).tar.gz ~/sites/
 
-# Backup Moodle files
-tar -czf moodle_backup_$(date +%Y%m%d).tar.gz /var/www/moodle
+# Databases
+mysqldump -u root -p koha_library > ~/sites/backups/koha-$(date +%Y%m%d).sql
+mysqldump -u root -p moodle > ~/sites/backups/moodle-$(date +%Y%m%d).sql
 ```
 
 ## Troubleshooting
 
-### Common Issues
-
-**SSL Certificate Issues**
+**Check services:**
 
 ```bash
-# Check Caddy status
-systemctl status caddy
-
-# View Caddy logs
-journalctl -u caddy -f
-
-# Test Caddy config
-caddy validate --config /etc/caddy/Caddyfile
+sudo systemctl status apache2 caddy mariadb koha-common php8.3-fpm
 ```
 
-**Database Connection Issues**
+**View logs:**
 
 ```bash
-# Test database connectivity
-mysql -u koha -p koha_library
-mysql -u moodle -p moodle
+sudo tail -f /var/log/caddy/koha.log
+sudo tail -f /var/log/caddy/moodle.log
 ```
 
-**Memory Issues**
+**Verify DNS:**
 
 ```bash
-# Check swap usage
-free -h
-
-# Check memory usage by service
-ps aux --sort=-%mem | head
+dig library.example.com
+dig staff.example.com
+dig lms.example.com
 ```
 
-### Log Locations
+## Resources
 
-- Caddy: `/var/log/caddy/`
-- Koha: `/var/log/koha/`
-- PHP-FPM: `/var/log/php8.3-fpm.log`
-- MariaDB: `/var/log/mysql/`
-
-## Security Recommendations
-
-- [ ] Change all default passwords
-- [ ] Set up automated backups
-- [ ] Configure fail2ban for SSH protection
-- [ ] Regular system updates
-- [ ] Monitor resource usage
-- [ ] Review access logs regularly
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test on a fresh Ubuntu 24.04 instance
-5. Submit a pull request
-
-## License
-
-MIT License - see LICENSE file for details
-
-## Support
-
-- 📖 [Koha Documentation](https://koha-community.org/documentation/)
-- 📖 [Moodle Documentation](https://docs.moodle.org/)
-- 📖 [Caddy Documentation](https://caddyserver.com/docs/)
-
-For issues with this setup script, please open a GitHub issue.
+- [Koha Documentation](https://koha-community.org/documentation/)
+- [Moodle Documentation](https://docs.moodle.org/)
