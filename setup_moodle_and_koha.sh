@@ -1,7 +1,6 @@
 #!/bin/bash
 
 # Koha + Moodle + Caddy Setup Script for Ubuntu 24.04
-# Final corrected version with all permission fixes and proper Caddy configuration
 #
 # Usage:
 #   1. git clone <your-repo>
@@ -103,232 +102,203 @@ echo
 read -p "Continue with this configuration? (y/N): " -n 1 -r
 echo
 if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-    error "Setup cancelled by user"
+    error "Installation cancelled by user"
 fi
 
+# Run system requirements check
 check_system_requirements
 
-log "Starting Koha + Moodle + Caddy setup on Ubuntu 24.04"
-
-# Update system packages
+# Update system first
 log "Updating system packages..."
-apt update && apt upgrade -y
+export DEBIAN_FRONTEND=noninteractive
+apt update
+apt upgrade -y
 
-# Create sites directory structure with proper permissions
-log "Creating sites directory structure..."
+# Install essential packages
+log "Installing essential packages..."
+apt install -y \
+    curl \
+    wget \
+    gnupg \
+    lsb-release \
+    ca-certificates \
+    software-properties-common \
+    net-tools \
+    git \
+    unzip \
+    htop \
+    ncdu
+
+# Create sites directory structure
+log "Creating directory structure..."
 mkdir -p "$SITES_DIRECTORY"/{moodle,data/moodledata,config,backups}
+chmod -R 755 "$SITES_DIRECTORY"
 
-# Set proper ownership - use www-data for web content
-chown -R www-data:www-data "$SITES_DIRECTORY"
-
-# Create a backup location accessible to the original user
-if [ -n "$SUDO_USER" ]; then
-    mkdir -p "/home/$SUDO_USER/sites-backup"
-    chown -R "$SUDO_USER":"$SUDO_USER" "/home/$SUDO_USER/sites-backup"
-fi
-
-# Install and secure MariaDB
+# Install MariaDB
 log "Installing MariaDB..."
 apt install -y mariadb-server mariadb-client
-systemctl start mariadb
-systemctl enable mariadb
 
 # Secure MariaDB installation
 log "Securing MariaDB installation..."
-if ! command -v expect &> /dev/null; then
-    apt install -y expect
-fi
 
-# Create automated mysql_secure_installation script
-cat > /tmp/mysql_setup.exp << 'EOF'
-#!/usr/bin/expect -f
-set timeout 30
-spawn sudo mysql_secure_installation
-
-expect "Enter current password for root (enter for none):"
-send "\r"
-
-expect "Switch to unix_socket authentication"
-send "n\r"
-
-expect "Change the root password?"
-send "y\r"
-
-expect "New password:"
-send "$env(DB_ROOT_PASSWORD)\r"
-
-expect "Re-enter new password:"
-send "$env(DB_ROOT_PASSWORD)\r"
-
-expect "Remove anonymous users?"
-send "y\r"
-
-expect "Disallow root login remotely?"
-send "y\r"
-
-expect "Remove test database and access to it?"
-send "y\r"
-
-expect "Reload privilege tables now?"
-send "y\r"
-
-expect eof
-EOF
-
-export DB_ROOT_PASSWORD="$DB_ROOT_PASSWORD"
-chmod +x /tmp/mysql_setup.exp
-
-log "Running automated MariaDB security setup..."
-if /tmp/mysql_setup.exp; then
-    log "✓ MariaDB secured successfully"
-else
-    warn "MariaDB security setup completed with possible warnings"
-fi
-
-rm -f /tmp/mysql_setup.exp
-unset DB_ROOT_PASSWORD
-
-# Create Moodle database (Koha will create its own)
-log "Creating Moodle database..."
-mysql -u root -p"$DB_ROOT_PASSWORD" << EOF
-CREATE DATABASE IF NOT EXISTS moodle DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER IF NOT EXISTS 'moodle'@'localhost' IDENTIFIED BY '$MOODLE_DB_PASSWORD';
-GRANT SELECT,INSERT,UPDATE,DELETE,CREATE,CREATE TEMPORARY TABLES,DROP,INDEX,ALTER,LOCK TABLES,REFERENCES ON moodle.* TO 'moodle'@'localhost';
+# Use mysql_secure_installation equivalent commands
+# First connect without password (default for fresh install)
+mysql <<EOF
+-- Set root password
+ALTER USER 'root'@'localhost' IDENTIFIED BY '$DB_ROOT_PASSWORD';
+-- Remove anonymous users
+DELETE FROM mysql.user WHERE User='';
+-- Disallow root login remotely
+DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');
+-- Remove test database
+DROP DATABASE IF EXISTS test;
+DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
+-- Reload privilege tables
 FLUSH PRIVILEGES;
 EOF
 
-log "✓ Moodle database created successfully"
-
-# Install PHP 8.3 and required extensions
-log "Installing PHP 8.3 and extensions..."
-apt install -y php8.3-fpm php8.3-mysql php8.3-xml php8.3-xmlrpc php8.3-curl \
-    php8.3-gd php8.3-imagick php8.3-cli php8.3-dev php8.3-imap php8.3-mbstring \
-    php8.3-opcache php8.3-soap php8.3-zip php8.3-intl php8.3-ldap \
-    php8.3-pspell php8.3-bcmath php8.3-bz2 php8.3-common \
-    graphviz aspell ghostscript clamav git unzip
-
-# Configure PHP for optimal performance
-log "Configuring PHP..."
-for ini_file in /etc/php/8.3/fpm/php.ini /etc/php/8.3/cli/php.ini; do
-    if [ -f "$ini_file" ]; then
-        sed -i "s/max_execution_time = 30/max_execution_time = 300/" "$ini_file"
-        sed -i "s/max_input_vars = 1000/max_input_vars = 5000/" "$ini_file"
-        sed -i "s/post_max_size = 8M/post_max_size = $PHP_MAX_UPLOAD/" "$ini_file"
-        sed -i "s/upload_max_filesize = 2M/upload_max_filesize = $PHP_MAX_UPLOAD/" "$ini_file"
-        sed -i "s/memory_limit = 128M/memory_limit = $PHP_MEMORY_LIMIT/" "$ini_file"
-    fi
-done
-
-systemctl restart php8.3-fpm
-
-# Install and configure Koha following official documentation
-log "Installing Koha following official documentation..."
-
-# Set up Koha package repository
-mkdir -p /etc/apt/keyrings
-chmod 755 /etc/apt/keyrings
-curl -fsSL https://debian.koha-community.org/koha/gpg.asc -o /etc/apt/keyrings/koha.asc
-
-tee /etc/apt/sources.list.d/koha.sources <<EOF
-Types: deb
-URIs: https://debian.koha-community.org/koha/
-Suites: 24.11
-Components: main
-Signed-By: /etc/apt/keyrings/koha.asc
+# Create Moodle database (now using the password we just set)
+log "Creating Moodle database..."
+mysql -u root -p"$DB_ROOT_PASSWORD" <<EOF
+CREATE DATABASE IF NOT EXISTS moodle DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS 'moodle'@'localhost' IDENTIFIED BY '$MOODLE_DB_PASSWORD';
+GRANT ALL PRIVILEGES ON moodle.* TO 'moodle'@'localhost';
+FLUSH PRIVILEGES;
 EOF
 
-apt update
-apt install -y koha-common
+# Install Apache (for Koha)
+log "Installing Apache..."
+apt install -y apache2 apache2-utils
 
-# Configure Apache for Koha (before creating instance)
+# Configure Apache for Koha
 log "Configuring Apache for Koha..."
-cp /etc/apache2/ports.conf /etc/apache2/ports.conf.backup
+a2enmod rewrite headers proxy proxy_http deflate
+a2dismod mpm_event
+a2enmod mpm_prefork
 
+# Change Apache ports for Koha
 cat > /etc/apache2/ports.conf << 'EOF'
-# Koha Apache configuration
-# Using ports 8000/8080 to avoid conflict with Caddy
-
 Listen 8000
 Listen 8080
 
 <IfModule ssl_module>
-    Listen 8443 ssl
+    Listen 8443
+    Listen 8444
 </IfModule>
 
 <IfModule mod_gnutls.c>
-    Listen 8443 ssl
+    Listen 8443
+    Listen 8444
 </IfModule>
 EOF
 
-# Enable required Apache modules
-a2enmod rewrite cgi headers proxy_http ssl
+# Install PHP 8.3 and extensions
+log "Installing PHP 8.3..."
+add-apt-repository -y ppa:ondrej/php
+apt update
+apt install -y \
+    php8.3 \
+    php8.3-fpm \
+    php8.3-cli \
+    php8.3-common \
+    php8.3-mysql \
+    php8.3-xml \
+    php8.3-xmlrpc \
+    php8.3-curl \
+    php8.3-gd \
+    php8.3-imagick \
+    php8.3-cli \
+    php8.3-dev \
+    php8.3-imap \
+    php8.3-mbstring \
+    php8.3-opcache \
+    php8.3-soap \
+    php8.3-zip \
+    php8.3-intl \
+    php8.3-bcmath \
+    php8.3-redis \
+    php8.3-ldap \
+    libapache2-mod-php8.3
 
-# Configure Koha sites configuration
-log "Configuring Koha sites..."
-cat > /etc/koha/koha-sites.conf << EOF
-DOMAIN="$DOMAIN_KOHA"
-INTRAPORT="8080"
-INTRAPREFIX=""
-INTRASUFFIX="-intra"
-DEFAULTSQL="mysql"
-MYSQL_HOST="localhost"
-MYSQL_USER="koha"
-MYSQL_PASS="$KOHA_DB_PASSWORD"
-PASSWDFILE="/etc/koha/passwd"
-ZEBRA_MARC_FORMAT="marc21"
-ZEBRA_LANGUAGE="en"
-ADMINUSER="1"
+# Configure PHP
+log "Configuring PHP..."
+PHP_INI_DIR="/etc/php/8.3"
+for ini in "$PHP_INI_DIR"/{fpm,cli}/php.ini; do
+    sed -i "s/memory_limit = .*/memory_limit = $PHP_MEMORY_LIMIT/" "$ini"
+    sed -i "s/upload_max_filesize = .*/upload_max_filesize = $PHP_MAX_UPLOAD/" "$ini"
+    sed -i "s/post_max_size = .*/post_max_size = $PHP_MAX_UPLOAD/" "$ini"
+    sed -i "s/max_execution_time = .*/max_execution_time = 300/" "$ini"
+    sed -i "s/max_input_time = .*/max_input_time = 300/" "$ini"
+    sed -i "s/;date.timezone.*/date.timezone = UTC/" "$ini"
+    sed -i "s/;opcache.enable=.*/opcache.enable=1/" "$ini"
+    sed -i "s/;opcache.memory_consumption=.*/opcache.memory_consumption=256/" "$ini"
+done
+
+# Restart PHP-FPM
+systemctl restart php8.3-fpm
+
+# Install Koha
+log "Installing Koha 24.11..."
+wget -qO - https://debian.koha-community.org/koha/gpg.asc | gpg --dearmor -o /usr/share/keyrings/koha-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/koha-keyring.gpg] https://debian.koha-community.org/koha 24.11 main" | tee /etc/apt/sources.list.d/koha-24.11.list
+apt update
+apt install -y koha-common
+
+# Configure Koha
+log "Configuring Koha..."
+sed -i 's/DOMAIN=".myDNSname.org"/DOMAIN=""/' /etc/koha/koha-sites.conf
+sed -i 's/INTRAPORT="80"/INTRAPORT="8080"/' /etc/koha/koha-sites.conf
+sed -i 's/OPACPORT="80"/OPACPORT="8000"/' /etc/koha/koha-sites.conf
+
+# Create Koha instance
+log "Creating Koha instance..."
+koha-create --create-db library
+
+# Configure Koha Apache virtual hosts
+log "Updating Koha Apache configuration..."
+cat > /etc/apache2/sites-available/library.conf << EOF
+# Koha OPAC (Public Interface) - Port 8000
+<VirtualHost *:8000>
+    Include /etc/koha/apache-shared.conf
+    Include /etc/koha/apache-shared-opac.conf
+    Include /etc/koha/sites/library/apache-vhost-opac.conf
+    ServerName localhost
+    DocumentRoot /usr/share/koha/opac/cgi-bin/opac
+    SetEnv KOHA_CONF "/etc/koha/sites/library/koha-conf.xml"
+    AssignUserID library-koha library-koha
+    ErrorLog /var/log/koha/library/opac-error.log
+    TransferLog /var/log/koha/library/opac-access.log
+</VirtualHost>
+
+# Koha Staff Interface - Port 8080  
+<VirtualHost *:8080>
+    Include /etc/koha/apache-shared.conf
+    Include /etc/koha/apache-shared-intranet.conf
+    Include /etc/koha/sites/library/apache-vhost-intranet.conf
+    ServerName localhost
+    DocumentRoot /usr/share/koha/intranet/cgi-bin
+    SetEnv KOHA_CONF "/etc/koha/sites/library/koha-conf.xml"
+    AssignUserID library-koha library-koha
+    ErrorLog /var/log/koha/library/intranet-error.log
+    TransferLog /var/log/koha/library/intranet-access.log
+</VirtualHost>
 EOF
 
-# Clean up any previous Koha installation
-log "Cleaning up any previous Koha installation..."
-koha-remove library 2>/dev/null || true
-rm -rf /etc/koha/sites/library 2>/dev/null || true
-
-# Create Koha instance (this handles database creation automatically)
-log "Creating Koha instance..."
-if koha-create --create-db library; then
-    log "✓ Koha instance 'library' created successfully"
-else
-    # Try alternative approach if --create-db fails
-    warn "Direct creation failed, trying without database creation..."
-    if koha-create library; then
-        log "✓ Koha instance created (database will be set up via web installer)"
-    else
-        error "Failed to create Koha instance"
-    fi
-fi
-
-# Verify Koha instance was created
-if [ ! -f "/etc/koha/sites/library/koha-conf.xml" ]; then
-    error "Koha configuration file not found. Instance creation failed."
-fi
-
-# Update Koha Apache configuration for custom ports
-log "Updating Koha Apache configuration..."
-if [ -f "/etc/apache2/sites-available/library.conf" ]; then
-    sed -i 's/:80>/:8000>/g' /etc/apache2/sites-available/library.conf
-    sed -i 's/:443>/:8443>/g' /etc/apache2/sites-available/library.conf
-    log "✓ Koha Apache configuration updated"
-fi
-
-# Enable and start Koha services
-log "Starting Koha services..."
-koha-plack --enable library
-koha-plack --start library
-koha-email-enable library
-
-# Restart Apache to load configuration
+# Disable default Apache site and enable Koha
+a2dissite 000-default
+a2ensite library
 systemctl restart apache2
 
-# Save Koha admin credentials
-koha-passwd library > "$SITES_DIRECTORY/config/koha-admin-password.txt"
+# Generate secure Koha admin password
+KOHA_ADMIN_PASS=$(openssl rand -base64 16)
+echo "Koha Admin Password: $KOHA_ADMIN_PASS" > "$SITES_DIRECTORY/config/koha-admin-password.txt"
 chmod 600 "$SITES_DIRECTORY/config/koha-admin-password.txt"
 
-log "✓ Koha admin credentials saved"
+# Set Koha admin password
+koha-passwd library "$KOHA_ADMIN_PASS"
 
-# Install and configure Moodle
-log "Installing Moodle..."
+# Install Moodle
+log "Installing Moodle 4.5..."
 cd "$SITES_DIRECTORY"
 
 if [ ! -d "moodle/.git" ]; then
@@ -363,13 +333,7 @@ curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /
 apt update
 apt install -y caddy
 
-# Create log directories with proper permissions BEFORE configuring Caddy
-log "Setting up Caddy log directories..."
-mkdir -p /var/log/caddy
-chown -R caddy:caddy /var/log/caddy
-chmod 755 /var/log/caddy
-
-# Configure Caddy with corrected configuration (fixed directive order and paths)
+# Configure Caddy with systemd logging
 log "Configuring Caddy reverse proxy..."
 cat > "$SITES_DIRECTORY/config/Caddyfile" << EOF
 {
@@ -387,10 +351,8 @@ $DOMAIN_KOHA {
     }
     encode gzip
     log {
-        output file /var/log/caddy/koha-opac.log {
-            roll_size 10mb
-            roll_keep 5
-        }
+        format json
+        # No output directive - logs go to systemd/journald
     }
 }
 
@@ -402,10 +364,8 @@ $DOMAIN_KOHA_STAFF {
     }
     encode gzip
     log {
-        output file /var/log/caddy/koha-staff.log {
-            roll_size 10mb
-            roll_keep 5
-        }
+        format json
+        # No output directive - logs go to systemd/journald
     }
 }
 
@@ -453,12 +413,8 @@ $DOMAIN_MOODLE {
     }
     
     log {
-        output file /var/log/caddy/moodle.log {
-            roll_size 10mb
-            roll_keep 5
-        }
-        # Using standard format instead of invalid 'transform' encoder
-        format console
+        format console  # More readable format for Moodle logs
+        # No output directive - logs go to systemd/journald
     }
 }
 EOF
@@ -532,10 +488,9 @@ Caddy: 80, 443 (Reverse proxy with SSL)
 MariaDB: 3306
 PHP-FPM: Socket /run/php/php8.3-fpm.sock
 
-== File Permissions ==
-Web files: www-data:www-data
-Configuration: root:root (secured)
-Logs: caddy:caddy
+== Logging ==
+All Caddy logs are managed by systemd/journald.
+View logs with: sudo journalctl -u caddy -f
 
 == Next Steps ==
 1. Point DNS records to this server
@@ -663,6 +618,13 @@ echo "Documentation: $SITES_DIRECTORY/config/setup-summary.txt"
 echo "Credentials: $SITES_DIRECTORY/config/koha-admin-password.txt"
 echo "Database Info: $SITES_DIRECTORY/config/database-credentials.txt"
 echo
+echo -e "${BLUE}📊 Viewing Logs:${NC}"
+echo "• View Caddy logs: sudo journalctl -u caddy -f"
+echo "• View today's logs: sudo journalctl -u caddy --since today"
+echo "• View Apache logs: sudo journalctl -u apache2 -f"
+echo "• View PHP-FPM logs: sudo journalctl -u php8.3-fpm -f"
+echo "• Export logs: sudo journalctl -u caddy > caddy-logs.txt"
+echo
 if [ "$all_services_ok" = true ]; then
     echo -e "${GREEN}✅ All services are running correctly!${NC}"
 else
@@ -671,7 +633,7 @@ fi
 echo
 echo -e "${BLUE}🔧 Troubleshooting Commands:${NC}"
 echo "• Check services: sudo systemctl status apache2 caddy mariadb koha-common"
-echo "• View logs: sudo tail -f /var/log/caddy/*.log"
+echo "• View Caddy logs: sudo journalctl -u caddy --no-pager -n 50"
 echo "• Restart services: sudo systemctl restart apache2 caddy"
 echo "• Koha shell: sudo koha-shell library"
 echo "• Validate Caddy config: sudo caddy validate --config /etc/caddy/Caddyfile"
@@ -683,6 +645,7 @@ echo "• Caddy (ports 80/443) → Reverse proxy with automatic SSL"
 echo "• Apache (ports 8000/8080) → Serves Koha"
 echo "• PHP-FPM (socket) → Processes Moodle"
 echo "• MariaDB (port 3306) → Database for both systems"
+echo "• Logs managed by systemd/journald (no file-based logging)"
 echo
 echo -e "${RED}🔒 Security Reminders:${NC}"
 echo "• Change default passwords after setup"
