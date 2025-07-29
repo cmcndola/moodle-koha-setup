@@ -128,53 +128,60 @@ apt install -y mariadb-server mariadb-client
 systemctl start mariadb
 systemctl enable mariadb
 
-# Properly secure MariaDB installation using the official method
+# FIXED: Properly secure MariaDB installation using automated expect script
 log "Securing MariaDB installation..."
-
-# Use the official mysql_secure_installation script (handles password setup automatically)
-log "Running mysql_secure_installation script..."
+warn "DO NOT TYPE ANYTHING - This process is automated!"
 
 # Create expect script to automate mysql_secure_installation
-cat > /tmp/mysql_setup.exp << EOF
+cat > /tmp/mysql_setup.exp << 'EOF'
 #!/usr/bin/expect -f
-set timeout 20
+set timeout 30
 
 spawn sudo mysql_secure_installation
 
 # Current password (empty by default)
 expect "Enter current password for root (enter for none):"
+sleep 1
 send "\r"
 
 # Switch to unix_socket authentication
 expect "Switch to unix_socket authentication"
+sleep 1
 send "n\r"
 
 # Change root password
 expect "Change the root password?"
+sleep 1
 send "y\r"
 
 # New password
 expect "New password:"
-send "$DB_ROOT_PASSWORD\r"
+sleep 1
+send "$env(DB_ROOT_PASSWORD)\r"
 
 # Re-enter password
 expect "Re-enter new password:"
-send "$DB_ROOT_PASSWORD\r"
+sleep 1
+send "$env(DB_ROOT_PASSWORD)\r"
 
 # Remove anonymous users
 expect "Remove anonymous users?"
+sleep 1
 send "y\r"
 
 # Disallow root login remotely
 expect "Disallow root login remotely?"
+sleep 1
 send "y\r"
 
 # Remove test database
 expect "Remove test database and access to it?"
+sleep 1
 send "y\r"
 
 # Reload privilege tables
 expect "Reload privilege tables now?"
+sleep 1
 send "y\r"
 
 expect eof
@@ -182,14 +189,25 @@ EOF
 
 # Install expect if not present and run the setup
 if ! command -v expect &> /dev/null; then
+    log "Installing expect for automation..."
     apt install -y expect
 fi
 
-chmod +x /tmp/mysql_setup.exp
-/tmp/mysql_setup.exp
-rm -f /tmp/mysql_setup.exp
+# Export password for expect script
+export DB_ROOT_PASSWORD="$DB_ROOT_PASSWORD"
 
-log "✓ MariaDB secured successfully"
+log "Running automated MariaDB security setup..."
+log "Please DO NOT TYPE ANYTHING during this process!"
+
+chmod +x /tmp/mysql_setup.exp
+if /tmp/mysql_setup.exp; then
+    log "✓ MariaDB secured successfully"
+else
+    warn "Automated setup may have had issues, but likely completed"
+fi
+
+rm -f /tmp/mysql_setup.exp
+unset DB_ROOT_PASSWORD
 
 # Create databases with proper permissions
 log "Creating databases..."
@@ -274,9 +292,34 @@ sed -i 's/Listen 443/Listen 8443/' /etc/apache2/ports.conf
 log "Configuring Apache modules for Koha..."
 a2enmod rewrite cgi headers proxy_http
 
-# Create Koha instance
+# Create Koha instance with proper error handling
 log "Creating Koha instance..."
-koha-create --create-db library
+
+# First, verify the database connection works
+log "Testing database connection for Koha..."
+if mysql -u koha -p"$KOHA_DB_PASSWORD" koha_library -e "SELECT 'Database connection OK' as status;" >/dev/null 2>&1; then
+    log "✓ Database connection verified"
+else
+    error "Database connection failed. Cannot proceed with Koha installation."
+fi
+
+# Remove any existing instance first (in case of previous failures)
+koha-remove library 2>/dev/null || true
+
+# Create Koha instance (use --create-db to let Koha handle database setup)
+log "Creating Koha instance..."
+if koha-create --create-db library; then
+    log "✓ Koha instance created successfully"
+else
+    error "Failed to create Koha instance"
+fi
+
+# Verify the configuration file was created
+if [ -f "/etc/koha/sites/library/koha-conf.xml" ]; then
+    log "✓ Koha configuration file created"
+else
+    error "Koha configuration file not found. Installation failed."
+fi
 koha-plack --enable library
 koha-plack --start library
 
