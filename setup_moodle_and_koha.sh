@@ -128,24 +128,66 @@ apt install -y mariadb-server mariadb-client
 systemctl start mariadb
 systemctl enable mariadb
 
-# FIXED: Properly secure MariaDB installation
+# Properly secure MariaDB installation using the official method
 log "Securing MariaDB installation..."
 
-# For Ubuntu 24.04, MariaDB uses unix_socket auth by default for root
-# First, set a password for root user
-mysql -u root << EOF
-ALTER USER 'root'@'localhost' IDENTIFIED BY '$DB_ROOT_PASSWORD';
-FLUSH PRIVILEGES;
+# Use the official mysql_secure_installation script (handles password setup automatically)
+log "Running mysql_secure_installation script..."
+
+# Create expect script to automate mysql_secure_installation
+cat > /tmp/mysql_setup.exp << EOF
+#!/usr/bin/expect -f
+set timeout 20
+
+spawn sudo mysql_secure_installation
+
+# Current password (empty by default)
+expect "Enter current password for root (enter for none):"
+send "\r"
+
+# Switch to unix_socket authentication
+expect "Switch to unix_socket authentication"
+send "n\r"
+
+# Change root password
+expect "Change the root password?"
+send "y\r"
+
+# New password
+expect "New password:"
+send "$DB_ROOT_PASSWORD\r"
+
+# Re-enter password
+expect "Re-enter new password:"
+send "$DB_ROOT_PASSWORD\r"
+
+# Remove anonymous users
+expect "Remove anonymous users?"
+send "y\r"
+
+# Disallow root login remotely
+expect "Disallow root login remotely?"
+send "y\r"
+
+# Remove test database
+expect "Remove test database and access to it?"
+send "y\r"
+
+# Reload privilege tables
+expect "Reload privilege tables now?"
+send "y\r"
+
+expect eof
 EOF
 
-# Now secure the installation with the new password
-mysql -u root -p"$DB_ROOT_PASSWORD" << EOF
-DELETE FROM mysql.user WHERE User='';
-DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');
-DROP DATABASE IF EXISTS test;
-DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
-FLUSH PRIVILEGES;
-EOF
+# Install expect if not present and run the setup
+if ! command -v expect &> /dev/null; then
+    apt install -y expect
+fi
+
+chmod +x /tmp/mysql_setup.exp
+/tmp/mysql_setup.exp
+rm -f /tmp/mysql_setup.exp
 
 log "✓ MariaDB secured successfully"
 
@@ -172,7 +214,7 @@ log "Installing PHP 8.3 and extensions..."
 apt install -y php8.3-fpm php8.3-mysql php8.3-xml php8.3-xmlrpc php8.3-curl \
     php8.3-gd php8.3-imagick php8.3-cli php8.3-dev php8.3-imap php8.3-mbstring \
     php8.3-opcache php8.3-soap php8.3-zip php8.3-intl php8.3-ldap \
-    php8.3-pspell php8.3-bcmath php8.3-exif php8.3-sodium \
+    php8.3-pspell php8.3-bcmath \
     graphviz aspell ghostscript clamav git
 
 # Configure PHP for both Koha and Moodle (following official recommendations)
