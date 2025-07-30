@@ -298,39 +298,9 @@ koha-create --create-db library
 # Remove the credentials file for security
 rm -f /root/.my.cnf
 
-# Configure Koha Apache virtual hosts
-log "Updating Koha Apache configuration..."
-cat > /etc/apache2/sites-available/library.conf << EOF
-# Koha OPAC (Public Interface) - Port 8000
-<VirtualHost *:8000>
-    Include /etc/koha/apache-shared.conf
-    Include /etc/koha/apache-shared-opac.conf
-    Include /etc/koha/sites/library/apache-vhost-opac.conf
-    ServerName localhost
-    DocumentRoot /usr/share/koha/opac/cgi-bin/opac
-    SetEnv KOHA_CONF "/etc/koha/sites/library/koha-conf.xml"
-    AssignUserID library-koha library-koha
-    ErrorLog /var/log/koha/library/opac-error.log
-    TransferLog /var/log/koha/library/opac-access.log
-</VirtualHost>
-
-# Koha Staff Interface - Port 8080  
-<VirtualHost *:8080>
-    Include /etc/koha/apache-shared.conf
-    Include /etc/koha/apache-shared-intranet.conf
-    Include /etc/koha/sites/library/apache-vhost-intranet.conf
-    ServerName localhost
-    DocumentRoot /usr/share/koha/intranet/cgi-bin
-    SetEnv KOHA_CONF "/etc/koha/sites/library/koha-conf.xml"
-    AssignUserID library-koha library-koha
-    ErrorLog /var/log/koha/library/intranet-error.log
-    TransferLog /var/log/koha/library/intranet-access.log
-</VirtualHost>
-EOF
-
-# Disable default Apache site and enable Koha
+# Disable default Apache site
 a2dissite 000-default
-a2ensite library
+# koha-create already enabled the site, just restart
 systemctl restart apache2
 
 # Generate secure Koha admin password
