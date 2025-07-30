@@ -14,9 +14,12 @@ Automated installation script for deploying Moodle (Learning Management System) 
 - [After Installation](#after-installation)
 - [File Structure](#file-structure)
 - [Architecture](#architecture)
+  - [Technical Notes](#technical-notes)
 - [Backup](#backup)
 - [Troubleshooting](#troubleshooting)
 - [Resources](#resources)
+- [Security Notes](#security-notes)
+  - [Credential Storage](#credential-storage)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
@@ -187,3 +190,34 @@ sudo systemctl restart apache2 caddy php8.3-fpm
 - [Koha Documentation](https://koha-community.org/documentation/)
 - [Moodle Documentation](https://docs.moodle.org/)
 - [Caddy Documentation](https://caddyserver.com/docs/)
+
+## Security Notes
+
+### Credential Storage
+
+After installation, sensitive credentials are stored in:
+
+- `/var/www/config/koha-admin-password.txt`
+- `/var/www/config/database-credentials.txt`
+
+These files have restricted permissions (`600`, root-only access), but for production environments, consider:
+
+1. **Moving credentials to a more secure location** outside the web directory:
+
+   ```bash
+   sudo mkdir -p /etc/moodle-koha-secure
+   sudo mv /var/www/config/*-password.txt /etc/moodle-koha-secure/
+   sudo mv /var/www/config/database-credentials.txt /etc/moodle-koha-secure/
+   sudo chmod 700 /etc/moodle-koha-secure
+   ```
+
+2. **Using a password manager** to store credentials and removing the files:
+
+   ```bash
+   sudo shred -vfz /var/www/config/*-password.txt
+   sudo shred -vfz /var/www/config/database-credentials.txt
+   ```
+
+3. **Excluding credential files from backups** to prevent accidental exposure
+
+Remember: The Koha admin password is only shown once during installation. Make sure to save it securely!
