@@ -278,9 +278,24 @@ sed -i 's/DOMAIN=".myDNSname.org"/DOMAIN=""/' /etc/koha/koha-sites.conf
 sed -i 's/INTRAPORT="80"/INTRAPORT="8080"/' /etc/koha/koha-sites.conf
 sed -i 's/OPACPORT="80"/OPACPORT="8000"/' /etc/koha/koha-sites.conf
 
+# Configure MySQL credentials for koha-create
+log "Configuring MySQL credentials for Koha..."
+
+# Create .my.cnf for root user so koha-create can connect
+cat > /root/.my.cnf << EOF
+[client]
+user=root
+password=$DB_ROOT_PASSWORD
+EOF
+
+chmod 600 /root/.my.cnf
+
 # Create Koha instance
 log "Creating Koha instance..."
 koha-create --create-db library
+
+# Remove the credentials file for security
+rm -f /root/.my.cnf
 
 # Configure Koha Apache virtual hosts
 log "Updating Koha Apache configuration..."
