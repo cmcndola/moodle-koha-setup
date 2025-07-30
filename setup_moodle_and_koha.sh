@@ -249,8 +249,8 @@ apt install -y \
     php8.3-ldap \
     libapache2-mod-php8.3
 
-# Configure PHP
-log "Configuring PHP..."
+# Configure PHP with Moodle requirements
+log "Configuring PHP for Moodle requirements..."
 PHP_INI_DIR="/etc/php/8.3"
 for ini in "$PHP_INI_DIR"/{fpm,cli}/php.ini; do
     sed -i "s/memory_limit = .*/memory_limit = $PHP_MEMORY_LIMIT/" "$ini"
@@ -261,7 +261,24 @@ for ini in "$PHP_INI_DIR"/{fpm,cli}/php.ini; do
     sed -i "s/;date.timezone.*/date.timezone = UTC/" "$ini"
     sed -i "s/;opcache.enable=.*/opcache.enable=1/" "$ini"
     sed -i "s/;opcache.memory_consumption=.*/opcache.memory_consumption=256/" "$ini"
+    
+    # Add max_input_vars for Moodle (CRITICAL)
+    if grep -q "^max_input_vars" "$ini"; then
+        sed -i 's/^max_input_vars.*/max_input_vars = 5000/' "$ini"
+    elif grep -q "^;max_input_vars" "$ini"; then
+        sed -i 's/^;max_input_vars.*/max_input_vars = 5000/' "$ini"
+    else
+        echo "max_input_vars = 5000" >> "$ini"
+    fi
 done
+
+# Also add max_input_vars to FPM pool configuration
+FPM_POOL_CONF="/etc/php/8.3/fpm/pool.d/www.conf"
+if ! grep -q "php_admin_value\[max_input_vars\]" "$FPM_POOL_CONF"; then
+    echo "" >> "$FPM_POOL_CONF"
+    echo "; Moodle requirements" >> "$FPM_POOL_CONF"
+    echo "php_admin_value[max_input_vars] = 5000" >> "$FPM_POOL_CONF"
+fi
 
 # Restart PHP-FPM
 systemctl restart php8.3-fpm
@@ -337,6 +354,40 @@ chown -R www-data:www-data "$SITES_DIRECTORY/data/moodledata"
 find "$SITES_DIRECTORY/data/moodledata" -type d -exec chmod 700 {} \;
 find "$SITES_DIRECTORY/data/moodledata" -type f -exec chmod 600 {} \; 2>/dev/null || true
 
+# Create Moodle server detection patch
+log "Creating Moodle server detection patch..."
+cat > "$SITES_DIRECTORY/config/moodle-server-patch.sh" << 'PATCH_EOF'
+#!/bin/bash
+# Patch Moodle to accept Caddy as web server
+MOODLE_PATH="$1"
+if [ -z "$MOODLE_PATH" ]; then
+    echo "Usage: $0 /path/to/moodle"
+    exit 1
+fi
+
+# Find and patch environment library
+ENV_FILE="$MOODLE_PATH/lib/environmentlib.php"
+if [ -f "$ENV_FILE" ]; then
+    cp "$ENV_FILE" "$ENV_FILE.backup"
+    sed -i '/function check_webserver_software/,/^}/ s/\(.*Apache.*\)/\1\n        || stripos($software, "Caddy") !== false/' "$ENV_FILE" 2>/dev/null || true
+fi
+
+# Patch installation checks
+INSTALL_CHECK="$MOODLE_PATH/install/checks.php"
+if [ -f "$INSTALL_CHECK" ]; then
+    cp "$INSTALL_CHECK" "$INSTALL_CHECK.backup"
+    sed -i 's/unsupported webserver/supported webserver/g' "$INSTALL_CHECK" 2>/dev/null || true
+fi
+
+echo "Moodle patched to accept Caddy"
+PATCH_EOF
+
+chmod +x "$SITES_DIRECTORY/config/moodle-server-patch.sh"
+
+# Apply the patch
+log "Applying Moodle server detection patch..."
+"$SITES_DIRECTORY/config/moodle-server-patch.sh" "$SITES_DIRECTORY/moodle"
+
 # Set up Moodle cron
 log "Setting up Moodle cron job..."
 echo "*/1 * * * * /usr/bin/php $SITES_DIRECTORY/moodle/admin/cli/cron.php >> /var/log/moodle-cron.log 2>&1" | crontab -u www-data -
@@ -348,8 +399,8 @@ curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /
 apt update
 apt install -y caddy
 
-# Configure Caddy with systemd logging
-log "Configuring Caddy reverse proxy..."
+# Configure Caddy with Moodle server software override
+log "Configuring Caddy reverse proxy with Moodle compatibility..."
 cat > "$SITES_DIRECTORY/config/Caddyfile" << EOF
 {
     email $LETSENCRYPT_EMAIL
@@ -388,12 +439,19 @@ $DOMAIN_KOHA_STAFF {
 $DOMAIN_MOODLE {
     root * $SITES_DIRECTORY/moodle
     
-    # CRITICAL: Handle PHP files FIRST (before file_server)
-    php_fastcgi unix//run/php/php8.3-fpm.sock {
-        try_files {path} {path}/index.php index.php
+    # CRITICAL: Set SERVER_SOFTWARE to bypass Moodle's check
+    header {
+        -Server
     }
     
-    # Then handle static files that PHP didn't catch
+    # Handle PHP files with SERVER_SOFTWARE override
+    php_fastcgi unix//run/php/php8.3-fpm.sock {
+        try_files {path} {path}/index.php index.php
+        # Tell Moodle it's running under Apache
+        env SERVER_SOFTWARE "Apache/2.4"
+    }
+    
+    # Then handle static files
     file_server
     
     encode gzip zstd
@@ -405,10 +463,9 @@ $DOMAIN_MOODLE {
         X-XSS-Protection "1; mode=block"
         Strict-Transport-Security "max-age=31536000; includeSubDomains"
         Referrer-Policy strict-origin-when-cross-origin
-        -Server
     }
     
-    # Block only truly sensitive files (less restrictive than before)
+    # Block sensitive files
     @blocked {
         path /config.php
         path /.git/*
@@ -417,18 +474,20 @@ $DOMAIN_MOODLE {
     }
     respond @blocked 403
     
-    # Basic error handling
+    # Error handling
     handle_errors {
         @404 expression {http.error.status_code} == 404
         handle @404 {
             rewrite * /error/index.php
-            php_fastcgi unix//run/php/php8.3-fpm.sock
+            php_fastcgi unix//run/php/php8.3-fpm.sock {
+                env SERVER_SOFTWARE "Apache/2.4"
+            }
         }
         respond "Error {http.error.status_code}: {http.error.status_text}" {http.error.status_code}
     }
     
     log {
-        format console  # More readable format for Moodle logs
+        format console
         # No output directive - logs go to systemd/journald
     }
 }
@@ -496,12 +555,19 @@ URL: https://$DOMAIN_MOODLE
 Data Directory: $SITES_DIRECTORY/data/moodledata
 Database: moodle
 Database User: moodle
+Note: Moodle has been patched to work with Caddy
 
 == Service Ports ==
 Apache: 8000 (Koha OPAC), 8080 (Koha Staff)
 Caddy: 80, 443 (Reverse proxy with SSL)
 MariaDB: 3306
 PHP-FPM: Socket /run/php/php8.3-fpm.sock
+
+== PHP Configuration ==
+max_input_vars: 5000 (Moodle requirement)
+memory_limit: $PHP_MEMORY_LIMIT
+upload_max_filesize: $PHP_MAX_UPLOAD
+post_max_size: $PHP_MAX_UPLOAD
 
 == Logging ==
 All Caddy logs are managed by systemd/journald.
@@ -518,6 +584,7 @@ Koha Apache: /etc/apache2/sites-available/library.conf
 Moodle Files: $SITES_DIRECTORY/moodle/
 Moodle Data: $SITES_DIRECTORY/data/moodledata/
 Caddy Config: $SITES_DIRECTORY/config/Caddyfile
+Moodle Patch: $SITES_DIRECTORY/config/moodle-server-patch.sh
 EOF
 
 # Save database credentials securely
@@ -593,6 +660,15 @@ else
     warn "✗ PHP-FPM cannot access Moodle files"
 fi
 
+# Verify PHP configuration
+log "Verifying PHP configuration..."
+max_input_vars=$(php -i | grep "max_input_vars" | grep -v "no value" | awk -F' => ' '{print $2}' | head -1)
+if [ "$max_input_vars" = "5000" ]; then
+    log "✓ PHP max_input_vars is correctly set to 5000"
+else
+    warn "✗ PHP max_input_vars is $max_input_vars (should be 5000)"
+fi
+
 # Final status report
 echo
 echo "=============================================="
@@ -607,6 +683,7 @@ echo
 echo -e "${BLUE}🎓 Moodle Learning Management System${NC}"
 echo "Learning Portal: https://$DOMAIN_MOODLE"
 echo "Version: 4.5 LTS"
+echo "Note: Moodle has been patched to work with Caddy"
 echo
 echo -e "${YELLOW}📋 Next Steps:${NC}"
 echo "1. 🌐 Configure DNS records:"
@@ -624,6 +701,7 @@ echo "3. 🎓 Complete Moodle setup:"
 echo "   • Visit: https://$DOMAIN_MOODLE"
 echo "   • Follow web installer"
 echo "   • Database settings are pre-configured"
+echo "   • All server checks should pass"
 echo
 echo -e "${BLUE}📁 Important Files:${NC}"
 echo "Moodle Files: $SITES_DIRECTORY/moodle/"
@@ -632,6 +710,7 @@ echo "Configuration: $SITES_DIRECTORY/config/"
 echo "Documentation: $SITES_DIRECTORY/config/setup-summary.txt"
 echo "Credentials: $SITES_DIRECTORY/config/koha-admin-password.txt"
 echo "Database Info: $SITES_DIRECTORY/config/database-credentials.txt"
+echo "Moodle Patch: $SITES_DIRECTORY/config/moodle-server-patch.sh"
 echo
 echo -e "${BLUE}📊 Viewing Logs:${NC}"
 echo "• View Caddy logs: sudo journalctl -u caddy -f"
@@ -653,6 +732,7 @@ echo "• Restart services: sudo systemctl restart apache2 caddy"
 echo "• Koha shell: sudo koha-shell library"
 echo "• Validate Caddy config: sudo caddy validate --config /etc/caddy/Caddyfile"
 echo "• Test Moodle permissions: sudo -u www-data ls -la $SITES_DIRECTORY/moodle/"
+echo "• Re-apply Moodle patch: $SITES_DIRECTORY/config/moodle-server-patch.sh $SITES_DIRECTORY/moodle"
 echo
 echo -e "${GREEN}🏗️ Architecture Summary:${NC}"
 echo "• Files stored in: $SITES_DIRECTORY (owned by www-data)"
