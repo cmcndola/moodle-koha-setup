@@ -2,6 +2,8 @@
 
 Automated installation script for deploying Moodle (Learning Management System) and Koha (Library Management System) on Ubuntu 24.04.
 
+[![ShellCheck](https://github.com/cmcndola/moodle-koha-setup/actions/workflows/main.yml/badge.svg)](https://github.com/cmcndola/moodle-koha-setup/actions/workflows/main.yml)
+
 <!-- START doctoc generated TOC please keep comment here to allow auto update -->
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
 
