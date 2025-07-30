@@ -27,6 +27,8 @@ jobs:
         with:
           scandir: "."
           format: gcc
+        env:
+          SHELLCHECK_OPTS: -x
 
       - name: ShellCheck Results
         if: failure()
