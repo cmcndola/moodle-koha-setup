@@ -275,9 +275,11 @@ done
 # Also add max_input_vars to FPM pool configuration
 FPM_POOL_CONF="/etc/php/8.3/fpm/pool.d/www.conf"
 if ! grep -q "php_admin_value\[max_input_vars\]" "$FPM_POOL_CONF"; then
-    echo "" >> "$FPM_POOL_CONF"
-    echo "; Moodle requirements" >> "$FPM_POOL_CONF"
-    echo "php_admin_value[max_input_vars] = 5000" >> "$FPM_POOL_CONF"
+    {
+        echo ""
+        echo "; Moodle requirements"
+        echo "php_admin_value[max_input_vars] = 5000"
+    } >> "$FPM_POOL_CONF"
 fi
 
 # Restart PHP-FPM
