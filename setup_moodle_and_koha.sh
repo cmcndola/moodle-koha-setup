@@ -42,6 +42,7 @@ fi
 
 # Load environment variables
 log "Loading environment configuration..."
+# shellcheck source=.env.example
 source .env
 
 # Validate required environment variables
