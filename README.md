@@ -42,9 +42,9 @@ sudo ./setup_moodle_and_koha.sh
 ## What Gets Installed
 
 - **Koha 24.11 LTS** - Library management system
-- **Moodle 4.5 LTS** - Learning management system
+- **Moodle 4.5 LTS** - Learning management system (patched for Caddy compatibility)
 - **MariaDB** - Database server
-- **PHP 8.3** - With all required extensions
+- **PHP 8.3** - With all required extensions (configured for Moodle requirements)
 - **Apache** - Serves Koha (ports 8000/8080)
 - **Caddy** - Reverse proxy with automatic SSL
 
@@ -80,6 +80,7 @@ SITES_DIRECTORY=/path/to/your/sites
 2. **Complete Moodle setup** at `https://lms.example.com`
    - Follow the web installer
    - Database is already configured
+   - All server requirements checks should pass
 
 ## File Structure
 
@@ -90,7 +91,8 @@ SITES_DIRECTORY=/path/to/your/sites
 ├── config/                 # All configuration files
 │   ├── Caddyfile
 │   ├── koha-admin-password.txt
-│   └── database-credentials.txt
+│   ├── database-credentials.txt
+│   └── moodle-server-patch.sh
 └── backups/                # For your backup scripts
 ```
 
@@ -103,6 +105,12 @@ Internet → Caddy (SSL) → {
   lms.example.com → PHP-FPM (Moodle)
 }
 ```
+
+### Technical Notes
+
+- **Moodle Compatibility**: Moodle doesn't officially support Caddy, but the script patches Moodle to accept it. Caddy acts as a reverse proxy while PHP-FPM serves Moodle.
+- **PHP Configuration**: Configured with `max_input_vars=5000` as required by Moodle
+- **SSL Certificates**: Automatically managed by Caddy via Let's Encrypt
 
 ## Backup
 
@@ -148,20 +156,30 @@ dig staff.example.com
 dig lms.example.com
 ```
 
+**Moodle-specific troubleshooting:**
+
+```bash
+# Check PHP configuration
+php -i | grep max_input_vars  # Should show 5000
+
+# Re-apply Moodle server patch if needed
+sudo /var/www/config/moodle-server-patch.sh /var/www/moodle
+
+# Test file permissions
+sudo -u www-data ls -la /var/www/moodle/
+```
+
 **Other useful commands:**
 
 ```bash
 # Validate Caddy configuration
 sudo caddy validate --config /etc/caddy/Caddyfile
 
-# Test Moodle file permissions
-sudo -u www-data ls -la /var/www/moodle/
-
 # Access Koha shell
 sudo koha-shell library
 
 # Restart services
-sudo systemctl restart apache2 caddy
+sudo systemctl restart apache2 caddy php8.3-fpm
 ```
 
 ## Resources
