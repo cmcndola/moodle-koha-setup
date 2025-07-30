@@ -167,14 +167,42 @@ FLUSH PRIVILEGES;
 EOF
 
 # Install Apache (for Koha)
-log "Installing Apache..."
-apt install -y apache2 apache2-utils
+log "Installing Apache and required modules..."
+apt install -y apache2 apache2-utils libapache2-mpm-itk
 
 # Configure Apache for Koha
 log "Configuring Apache for Koha..."
-a2enmod rewrite headers proxy proxy_http deflate cgi
-a2dismod mpm_event
+# Disable any conflicting MPM modules first
+for mpm in event worker; do
+    if a2query -m mpm_$mpm 2>/dev/null; then
+        a2dismod mpm_$mpm
+    fi
+done
+
+# Enable mpm_prefork (required for mpm_itk)
 a2enmod mpm_prefork
+
+# Enable all required modules for Koha
+a2enmod rewrite
+a2enmod headers
+a2enmod proxy
+a2enmod proxy_http
+a2enmod deflate
+a2enmod cgi
+a2enmod mpm_itk
+
+# Restart Apache to apply all module changes
+systemctl restart apache2
+
+# Verify required modules are loaded
+log "Verifying Apache modules..."
+for module in rewrite cgi mpm_itk; do
+    if /usr/sbin/apachectl -M 2>/dev/null | grep -q "${module}_module"; then
+        log "✓ Apache module $module is enabled"
+    else
+        error "Apache module $module failed to enable"
+    fi
+done
 
 # Change Apache ports for Koha
 cat > /etc/apache2/ports.conf << 'EOF'
