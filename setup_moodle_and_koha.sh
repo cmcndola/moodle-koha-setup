@@ -313,6 +313,7 @@ koha-passwd library "$KOHA_ADMIN_PASS"
 
 # Install Moodle
 log "Installing Moodle 4.5..."
+chown -R www-data:www-data "$SITES_DIRECTORY"
 cd "$SITES_DIRECTORY"
 
 if [ ! -d "moodle/.git" ]; then
